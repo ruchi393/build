@@ -74,7 +74,7 @@ endif
 # # Then in QEMU, run:
 # # $ mount -t 9p -o trans=virtio host <mount_point>
 # # Or enable QEMU_VIRTFS_AUTOMOUNT
-QEMU_VIRTFS_ENABLE	?= n
+QEMU_VIRTFS_ENABLE	?= y
 QEMU_VIRTFS_HOST_DIR	?= $(ROOT)
 
 # Persistent Secure Storage via shared folder
@@ -523,3 +523,43 @@ benchmark-app-common: optee-os optee-client
 .PHONY: benchmark-app-clean-common
 benchmark-app-clean-common:
 	$(MAKE) -C $(OPTEE_BENCHMARK_PATH) clean
+
+
+################################################################################
+# oemcrypto lib
+################################################################################
+
+OEMCRYPTO_PATH		?= $(ROOT)/optee-widevine-ref
+
+OEMCRYPTO_ARCH ?= \
+	ARCH=aarch64
+
+OEMCRYPTO_FLAGS ?= \
+	TA_CROSS_COMPILE=$(CROSS_COMPILE_S_USER) \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	TEEC_EXPORT=$(OPTEE_CLIENT_EXPORT)/usr \
+	CFG_VERIFICATION_FUNCS=y
+
+
+.PHONY: oemcrypto-common
+oemcrypto-common: optee-os optee-client-common
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) $(OEMCRYPTO_FLAGS) all
+
+
+.PHONY: ce-cdm-common
+ce-cdm-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) $(OEMCRYPTO_FLAGS) ce_cdm
+
+
+.PHONY: oemcrypto-clean-common
+oemcrypto-clean-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) distclean
+
+define ww-help
+	@echo \* To run widevine test suite, use the alias mentioned below in the \'Normal World\' Terminal
+	@echo \* Enter \'widevine_ce_cdm_unittest\' to run the ce_cdm test suite
+endef
+
+.PHONY: oemcrypto-help-common
+oemcrypto-help-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) qemu_help
