@@ -75,7 +75,7 @@ endif
 # # Then in QEMU, run:
 # # $ mount -t 9p -o trans=virtio host <mount_point>
 # # Or enable QEMU_VIRTFS_AUTOMOUNT
-QEMU_VIRTFS_ENABLE	?= n
+QEMU_VIRTFS_ENABLE	?= y
 QEMU_VIRTFS_HOST_DIR	?= $(ROOT)
 
 # Persistent Secure Storage via shared folder
@@ -450,3 +450,121 @@ optee-os-common:
 .PHONY: optee-os-clean-common
 optee-os-clean-common:
 	$(MAKE) -C $(OPTEE_OS_PATH) $(OPTEE_OS_COMMON_FLAGS) clean
+
+OPTEE_CLIENT_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_USER) \
+	CFG_TEE_BENCHMARK=$(CFG_TEE_BENCHMARK) \
+	CFG_TA_TEST_PATH=y
+
+.PHONY: optee-client-common
+optee-client-common:
+	$(MAKE) -C $(OPTEE_CLIENT_PATH) $(OPTEE_CLIENT_COMMON_FLAGS)
+
+# OPTEE_CLIENT_CLEAN_COMMON_FLAGS can be defined in specific makefiles
+# (hikey.mk,...) if necessary
+
+.PHONY: optee-client-clean-common
+optee-client-clean-common:
+	$(MAKE) -C $(OPTEE_CLIENT_PATH) $(OPTEE_CLIENT_CLEAN_COMMON_FLAGS) \
+		clean
+
+################################################################################
+# xtest / optee_test
+################################################################################
+XTEST_COMMON_FLAGS ?= CROSS_COMPILE_HOST=$(CROSS_COMPILE_NS_USER)\
+	CROSS_COMPILE_TA=$(CROSS_COMPILE_S_USER) \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	OPTEE_CLIENT_EXPORT=$(OPTEE_CLIENT_EXPORT) \
+	COMPILE_NS_USER=$(COMPILE_NS_USER) \
+	O=$(OPTEE_TEST_OUT_PATH)
+
+.PHONY: xtest-common
+xtest-common: optee-os optee-client
+	$(MAKE) -C $(OPTEE_TEST_PATH) $(XTEST_COMMON_FLAGS)
+
+XTEST_CLEAN_COMMON_FLAGS ?= O=$(OPTEE_TEST_OUT_PATH) \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+
+.PHONY: xtest-clean-common
+xtest-clean-common:
+	$(MAKE) -C $(OPTEE_TEST_PATH) $(XTEST_CLEAN_COMMON_FLAGS) clean
+
+XTEST_PATCH_COMMON_FLAGS ?= $(XTEST_COMMON_FLAGS)
+
+.PHONY: xtest-patch-common
+xtest-patch-common:
+	$(MAKE) -C $(OPTEE_TEST_PATH) $(XTEST_PATCH_COMMON_FLAGS) patch
+
+################################################################################
+# sample applications / optee_examples
+################################################################################
+OPTEE_EXAMPLES_COMMON_FLAGS ?= HOST_CROSS_COMPILE=$(CROSS_COMPILE_NS_USER)\
+	TA_CROSS_COMPILE=$(CROSS_COMPILE_S_USER) \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	TEEC_EXPORT=$(OPTEE_CLIENT_EXPORT)
+
+.PHONY: optee-examples-common
+optee-examples-common: optee-os optee-client
+	$(MAKE) -C $(OPTEE_EXAMPLES_PATH) $(OPTEE_EXAMPLES_COMMON_FLAGS)
+
+OPTEE_EXAMPLES_CLEAN_COMMON_FLAGS ?= TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR)
+
+.PHONY: optee-examples-clean-common
+optee-examples-clean-common:
+	$(MAKE) -C $(OPTEE_EXAMPLES_PATH) \
+			$(OPTEE_EXAMPLES_CLEAN_COMMON_FLAGS) clean
+
+################################################################################
+# benchmark_app
+################################################################################
+BENCHMARK_APP_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_USER) \
+	TEEC_EXPORT=$(OPTEE_CLIENT_EXPORT) \
+	TEEC_INTERNAL_INCLUDES=$(OPTEE_CLIENT_PATH)/libteec \
+	MULTIARCH=$(MULTIARCH)
+
+.PHONY: benchmark-app-common
+benchmark-app-common: optee-os optee-client
+	$(MAKE) -C $(OPTEE_BENCHMARK_PATH) $(BENCHMARK_APP_COMMON_FLAGS)
+
+.PHONY: benchmark-app-clean-common
+benchmark-app-clean-common:
+	$(MAKE) -C $(OPTEE_BENCHMARK_PATH) clean
+
+
+################################################################################
+# oemcrypto lib
+################################################################################
+
+OEMCRYPTO_PATH		?= $(ROOT)/optee-widevine-ref
+
+OEMCRYPTO_ARCH ?= \
+	ARCH=aarch64
+
+OEMCRYPTO_FLAGS ?= \
+	TA_CROSS_COMPILE=$(CROSS_COMPILE_S_USER) \
+	TA_DEV_KIT_DIR=$(OPTEE_OS_TA_DEV_KIT_DIR) \
+	TEEC_EXPORT=$(OPTEE_CLIENT_EXPORT)/usr \
+	CFG_VERIFICATION_FUNCS=y
+
+
+.PHONY: oemcrypto-common
+oemcrypto-common: optee-os optee-client-common
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) $(OEMCRYPTO_FLAGS) all
+
+
+.PHONY: ce-cdm-common
+ce-cdm-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) $(OEMCRYPTO_FLAGS) ce_cdm
+
+
+.PHONY: oemcrypto-clean-common
+oemcrypto-clean-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) distclean
+
+define ww-help
+	@echo \* To run widevine test suite, use the alias mentioned below in the \'Normal World\' Terminal
+	@echo \* Enter \'widevine_ce_cdm_unittest\' to run the ce_cdm test suite
+endef
+
+.PHONY: oemcrypto-help-common
+oemcrypto-help-common:
+	$(MAKE) -C $(OEMCRYPTO_PATH) $(OEMCRYPTO_ARCH) qemu_help
