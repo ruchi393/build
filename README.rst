@@ -104,6 +104,33 @@ Start tftpd through xinetd
 
     $ sudo /etc/init.d/xinetd restart
 
+Configure xen
+===========================
+
+How to get the dtb:
+
+qemu-system-aarch64  -machine virt,gic_version=3 -machine virtualization=true -cpu cortex-a57 -machine type=virt -m 4096 -smp 4 -display none -machine dumpdtb=virt-gicv3.dtb
+
+
+Find the size of the images needed by using command below on bash prompt and replace in u-boot commands below:
+printf "0x%x\n" $(stat -c %s <filename>)
+
+fdt addr 0x44000000
+fdt resize
+fdt set /chosen \#address-cells <1>
+fdt set /chosen \#size-cells <1>
+fdt mknod /chosen module@0
+fdt set /chosen/module@0 compatible "xen,linux-zimage" "xen,multiboot-module"
+fdt set /chosen/module@0 reg <0x47000000 0xa5779a>
+fdt set /chosen/module@0 bootargs "rw root=/dev/ram rdinit=/sbin/init console=hvc0 earlycon=xenboot"
+fdt mknod /chosen module@1
+fdt set /chosen/module@1 compatible "xen,linux-initrd" "xen,multiboot-module"
+fdt set /chosen/module@1 reg <0x42000000 0x2fc053>
+booti 0x49000000 - 0x44000000
+
+If reboot happens after xen without linux boot, check the sizes in reg command above
+
+
 Symlink the necessary files
 ===========================
 .. code-block:: bash
@@ -114,6 +141,7 @@ Symlink the necessary files
     $ ln -s <project_path>/buildroot/output/images/rootfs.cpio.uboot .
     $ ln -s <project_path>/buildroot/output/images/rootfs.cpio.gz .
     $ ln -s <project_path>/out/qemu-aarch64.dtb .
+
 
 
 // Joakim Bech

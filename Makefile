@@ -10,7 +10,7 @@
 ################################################################################
 CCACHE ?= $(shell which ccache) # Don't remove this comment (space is needed)
 
-ROOT				?= $(PWD)
+ROOT				?= $(PWD)/..
 
 BUILD_PATH			?= $(ROOT)/build
 BR_PATH				?= $(ROOT)/buildroot
@@ -19,6 +19,7 @@ OUT_PATH			?= $(ROOT)/out
 QEMU_PATH			?= $(ROOT)/qemu
 UBOOT_PATH			?= $(ROOT)/u-boot
 MKIMAGE_PATH			?= $(UBOOT_PATH)/tools
+XEN_PATH			?= $(ROOT)/xen
 
 DEBUG				?= n
 PLATFORM			?= qemu
@@ -35,17 +36,19 @@ QEMU_DTB			?= $(OUT_PATH)/qemu-aarch64.dtb
 QEMU_ENV			?= $(OUT_PATH)/envstore.img
 ROOTFS				?= $(BR_PATH)/output/images/rootfs.cpio.gz
 UROOTFS				?= $(BR_PATH)/output/images/rootfs.cpio.uboot
+XEN				?= $(XEN_PATH)/xen
 
 ################################################################################
 # Targets
 ################################################################################
 .PHONY: all
-all: linux qemu uboot buildroot
+all: linux qemu uboot buildroot xen uboot-images
 
 include toolchain.mk
 
 #################################################################################
 ## Buildroot
+##		BR2_CCACHE_DIR="$(CCACHE_DIR)" && \
 #################################################################################
 BR_DEFCONFIG_FILES := $(BUILD_PATH)/br_kconfigs/br_qemu_aarch64_virt.conf
 $(BR_PATH)/.config:
@@ -59,8 +62,7 @@ $(BR_PATH)/.config:
 .PHONY: buildroot
 buildroot: $(BR_PATH)/.config
 	$(MAKE) -C $(BR_PATH) \
-		AARCH64_PATH=$(AARCH64_PATH) \
-		BR2_CCACHE_DIR="$(CCACHE_DIR)" && \
+		AARCH64_PATH=$(AARCH64_PATH) &&\
 	ln -sf $(ROOTFS) $(OUT_PATH)/ && \
 	ln -sf $(UROOTFS) $(OUT_PATH)/
 
@@ -101,6 +103,16 @@ linux-clean:
 .PHONY: linux-cscope
 linux-cscope:
 	$(MAKE) -C $(LINUX_PATH) cscope
+
+################################################################################
+# XEN
+################################################################################
+.PHONY: xen
+xen: 
+	make -C $(XEN_PATH) \
+		dist-xen XEN_TARGET_ARCH=arm64 \
+	       	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)" \
+		ln -sf $(XEN)/xen $(OUT_PATH)
 
 ################################################################################
 # QEMU
@@ -208,12 +220,19 @@ QEMU_BIOS	?= -bios u-boot.bin
 QEMU_KERNEL	?= -kernel Image.gz
 
 QEMU_ARGS	+= -nographic \
-		   -smp 1 \
-		   -machine virt \
+		   -smp 4 \
+		   -serial tcp:localhost:54320 \
+		   -machine virt,gic-version=3 \
 		   -cpu cortex-a57 \
 		   -d unimp \
-		   -m 128 \
+		   -m 4096 \
 		   -no-acpi
+
+QEMU_XEN	+= -machine virtualization=true \
+		   -device loader,file=xen,force-raw=on,addr=0x49000000 \
+		   -device loader,file=Image.gz,addr=0x47000000  \
+		   -device loader,file=rootfs.cpio.gz,addr=0x42000000	\
+		   -device loader,file=virt-gicv3.dtb,addr=0x44000000
 
 ifeq ($(GDB),y)
 QEMU_ARGS	+= -s -S
@@ -229,6 +248,7 @@ run: create-env-image
 	cd $(OUT_PATH) && \
 	$(QEMU_BIN) \
 		$(QEMU_ARGS) \
+		$(QEMU_XEN) \
 		$(QEMU_BIOS) \
 		-semihosting-config enable,target=native \
                 -append 'console=ttyAMA0,38400 keep_bootcon root=/dev/vda2'
@@ -246,6 +266,7 @@ run-netboot: create-env-image uimage
 	$(QEMU_BIN) \
 		$(QEMU_ARGS) \
 		$(QEMU_BIOS) \
+		$(QEMU_XEN) \
 		-netdev user,id=vmnic -device virtio-net-device,netdev=vmnic \
 		-drive if=pflash,format=raw,index=1,file=envstore.img
 
