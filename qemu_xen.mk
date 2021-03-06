@@ -23,6 +23,12 @@ include common.mk
 
 DEBUG ?= 1
 
+# Bu default QEMU works only with GICv3 for vitualization
+GICV3 ?= y
+
+# If things go wrong , we can try booting from uboot as bios
+BIOS_UBOOT ?= n
+
 ################################################################################
 # Paths to git projects and various binaries
 ################################################################################
@@ -39,7 +45,6 @@ endif
 EDK2_BIN		?= $(EDK2_PATH)/Build/ArmVirtQemuKernel-$(EDK2_ARCH)/$(EDK2_BUILD)_$(EDK2_TOOLCHAIN)/FV/QEMU_EFI.fd
 QEMU_PATH		?= $(ROOT)/qemu
 QEMU_BIN		?= $(QEMU_PATH)/aarch64-softmmu/qemu-system-aarch64
-QEMU_DTB		?= $(BINARIES_PATH)/virt-gicv3.dtb
 SOC_TERM_PATH		?= $(ROOT)/soc_term
 UBOOT_PATH		?= $(ROOT)/u-boot
 UBOOT_BIN		?= $(UBOOT_PATH)/u-boot.bin
@@ -49,11 +54,31 @@ BL33_BIN		?= $(UBOOT_BIN)
 #BL33_BIN		?= $(EDK2_BIN)
 
 
+KERNEL			?= $(LINUX_PATH)/arch/arm64/boot/Image
+MKIMAGE_PATH		?= $(UBOOT_PATH)/tools
+KERNEL_UIMAGE		?= $(BINARIES_PATH)/uImage
+ROOTFS			?= $(BINARIES_PATH)/rootfs.cpio.gz
+UROOTFS			?= $(BINARIES_PATH)/rootfs.cpio.uboot
 
+ifeq ($(GICV3),n)
+	TFA_GIC_DRIVER	?= QEMU_GICV2
+	QEMU_GIC_VERSION = 2
+
+else
+	TFA_GIC_DRIVER	?= QEMU_GICV3
+	QEMU_GIC_VERSION = 3
+endif
+
+ifeq ($(BIOS_UBOOT),y)
+	QEMU_DTB		?= virt-gicv3.dtb
+else
+	QEMU_DTB		?= virt-gicv3-secure.dtb
+endif
+	
 ################################################################################
 # Targets
 ################################################################################
-all: arm-tf buildroot uboot linux optee-os qemu soc-term xen
+all: arm-tf buildroot uboot linux optee-os qemu soc-term xen uboot-images dump-dtb
 clean: arm-tf-clean buildroot-clean edk2-clean linux-clean optee-os-clean \
 	qemu-clean soc-term-clean check-clean
 
@@ -74,15 +99,17 @@ TF_A_LOGLVL ?= 50
 TF_A_OUT = $(TF_A_PATH)/build/qemu/debug
 endif
 
+#	BL32=$(OPTEE_OS_HEADER_V2_BIN) \
+#	BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
+#	BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN) \
+#	SPD=opteed \
+#	BL32_RAM_LOCATION=tdram \
+
 TF_A_FLAGS ?= \
-	BL32=$(OPTEE_OS_HEADER_V2_BIN) \
-	BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
-	BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN) \
 	BL33=$(BL33_BIN) \
 	PLAT=qemu \
 	ARM_TSP_RAM_LOCATION=tdram \
-	BL32_RAM_LOCATION=tdram \
-	SPD=opteed \
+	QEMU_USE_GIC_DRIVER=$(TFA_GIC_DRIVER) \
 	DEBUG=$(TF_A_DEBUG) \
 	LOG_LEVEL=$(TF_A_LOGLVL)
 
@@ -93,7 +120,7 @@ TF_A_FLAGS += \
 	GENERATE_COT=1
 endif
 
-arm-tf: optee-os edk2
+arm-tf: optee-os uboot
 	$(TF_A_EXPORTS) $(MAKE) -C $(TF_A_PATH) $(TF_A_FLAGS) all fip
 	mkdir -p $(BINARIES_PATH)
 	ln -sf $(TF_A_OUT)/bl1.bin $(BINARIES_PATH)
@@ -128,12 +155,6 @@ qemu:
 qemu-clean:
 	$(MAKE) -C $(QEMU_PATH) distclean
 
-dump-dtb:
-	$(QEMU_BIN) -machine virt,gic-version=3 \
-		-machine virtualization=true	\
-		-cpu cortex-a57 \
-		-m 4096 -smp 4 -display none	\
-		-machine dumpdtb=$(QEMU_DTB)
 
 ################################################################################
 # EDK2 / Tianocore
@@ -183,7 +204,7 @@ linux-cleaner: linux-cleaner-common
 ################################################################################
 # OP-TEE
 ################################################################################
-OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG)
+OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3)
 optee-os: optee-os-common
 
 optee-os-clean: optee-os-clean-common
@@ -200,8 +221,14 @@ soc-term-clean:
 ################################################################################
 # U-boot
 ################################################################################
+ifeq ($(BIOS_UBOOT),y)
+UBOOT_DEFCONFIG_FILES := $(UBOOT_PATH)/configs/qemu_arm64_defconfig		\
+			 $(ROOT)/build/kconfigs/u-boot_qemu_virt_v8_xen_standalone.conf
+BIOS		:= u-boot.bin
+else
 UBOOT_DEFCONFIG_FILES := $(UBOOT_PATH)/configs/qemu_arm64_defconfig		\
 			 $(ROOT)/build/kconfigs/u-boot_qemu_virt_v8.conf
+endif
 
 $(UBOOT_PATH)/.config: $(UBOOT_DEFCONFIG_FILES)
 	cd $(UBOOT_PATH) && \
@@ -212,10 +239,9 @@ uboot-defconfig: $(UBOOT_PATH)/.config
 
 .PHONY: uboot
 uboot: uboot-defconfig
-	mkdir -p $(BINARIES_PATH) && \
-	$(MAKE) -C $(UBOOT_PATH) \
-		CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)" && \
-	ln -sf $(BIOS) $(BINARIES_PATH)/
+	$(MAKE) -C $(UBOOT_PATH) CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
+	mkdir -p $(BINARIES_PATH)
+	ln -sf $(UBOOT_PATH)/$(BIOS) $(BINARIES_PATH)/
 
 .PHONY: uboot-menuconfig
 uboot-menuconfig: uboot-defconfig
@@ -236,10 +262,48 @@ uboot-cscope:
 ################################################################################
 .PHONY: xen
 xen: 
-	make -C $(XEN_PATH) \
-		dist-xen XEN_TARGET_ARCH=arm64 \
-	       	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)" && \
-		ln -sf $(XEN)/xen $(BINARIES_PATH)
+	$(MAKE) -C $(XEN_PATH) \
+	dist-xen XEN_TARGET_ARCH=arm64 \
+      	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
+	ln -sf $(XEN)/xen $(BINARIES_PATH)
+
+################################################################################
+# mkimage
+################################################################################
+uboot-images: uimage urootfs
+
+KERNEL_ENTRY    ?= 0x47000000
+KERNEL_LOADADDR ?= 0x47000000
+ROOTFS_ENTRY    ?= 0x44000000
+ROOTFS_LOADADDR ?= 0x44000000
+
+# TODO: The linux.bin thing probably isn't necessary.
+.PHONY: uimage
+uimage: $(KERNEL)
+	mkdir -p $(BINARIES_PATH) && \
+        ${AARCH64_CROSS_COMPILE}objcopy -O binary -R .note -R .comment -S $(LINUX_PATH)/vmlinux $(BINARIES_PATH)/linux.bin && \
+        $(MKIMAGE_PATH)/mkimage -A arm64 \
+                                -O linux \
+                                -T kernel \
+                                -C none \
+                                -a $(KERNEL_LOADADDR) \
+                                -e $(KERNEL_ENTRY) \
+                                -n "Linux kernel" \
+                                -d $(BINARIES_PATH)/linux.bin $(KERNEL_UIMAGE)
+
+# FIXME: Names clashes ROOTFS and UROOTFS, this will overwrite the u-rootfs from Buildroot.
+.PHONY: urootfs
+urootfs:
+	mkdir -p $(BINARIES_PATH) && \
+	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/ && \
+        $(MKIMAGE_PATH)/mkimage -A arm64 \
+                                -T ramdisk \
+                                -C gzip \
+                                -a $(ROOTFS_LOADADDR) \
+                                -e $(ROOTFS_ENTRY) \
+                                -n "Root files system" \
+                                -d $(ROOTFS) $(UROOTFS)
+
 
 ################################################################################
 # Run targets
@@ -251,17 +315,36 @@ run: all
 
 QEMU_SMP ?= 4
 
-QEMU_BIOS	?= -bios bl1.bin
 QEMU_KERNEL	?= -kernel Image.gz
+
+# This u-boot should not be compiled with defconfig in build folder
+#
+ifeq ($(BIOS_UBOOT),y)
+QEMU_BIOS	?= -bios u-boot.bin
+QEMU_SECURE_FLASH ?= 
+QEMU_XEN_UBOOT	?=  -no-acpi -device loader,file=xen,force-raw=on,addr=0x49000000 \
+		   -device loader,file=Image.gz,addr=0x47000000  \
+		   -device loader,file=rootfs.cpio.gz,addr=0x42000000	\
+		   -device loader,file=$(QEMU_DTB),addr=0x44000000
+else
+QEMU_BIOS	?= -bios bl1.bin
+QEMU_SECURE_FLASH ?= -machine virt,secure=on
+QEMU_XEN_UBOOT ?=
+endif
 
 
 QEMU_XEN	+= -machine virtualization=true \
-		   -machine virt,gic-version=3			\
-		   -device loader,file=xen,force-raw=on,addr=0x49000000 \
-		   -device loader,file=Image.gz,addr=0x47000000  \
-		   -device loader,file=rootfs.cpio.gz,addr=0x42000000	\
-		   -device loader,file=virt-gicv3.dtb,addr=0x44000000
+		   -machine virt,gic-version=$(QEMU_GIC_VERSION)	\
+		   -netdev user,id=vmnic -device virtio-net-device,netdev=vmnic 
 
+
+dump-dtb:
+	$(QEMU_BIN) -machine virt,gic-version=$(QEMU_GIC_VERSION) \
+		-machine virtualization=true	\
+		-cpu cortex-a57 \
+		-m 4096 -smp $(QEMU_SMP) -display none	\
+		$(QEMU_SECURE_FLASH)		\
+		-machine dumpdtb=$(BINARIES_PATH)/$(QEMU_DTB)
  
 .PHONY: run-only
 run-only:
@@ -275,20 +358,19 @@ run-only:
 		-nographic \
 		-serial tcp:localhost:54320 -serial tcp:localhost:54321 \
 		-smp $(QEMU_SMP) \
-		-s -S -machine virt,secure=on -cpu cortex-a57 \
+		-s -S $(QEMU_SECURE_FLASH)\
+	       	-cpu cortex-a57 			\
+		-machine virt,gic-version=$(QEMU_GIC_VERSION)			\
 		-d unimp -semihosting-config enable,target=native \
 		-m 1057 \
-		-bios bl1.bin \
-		-initrd rootfs.cpio.gz \
-		-drive if=pflash,format=raw,index=1,file=envstore.img		\
-		-kernel Image -no-acpi \
-		-append 'console=ttyAMA0,38400 keep_bootcon root=/dev/vda2' \
-		$(QEMU_EXTRA_ARGS)
+		-bios bl1.bin
+
+		#$(QEMU_EXTRA_ARGS)
+
 
 
 .PHONY: run-xen
-run-xen:
-	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/
+run-xen: dump-dtb
 	$(call check-terminal)
 	$(call run-help)
 	$(call launch-terminal,54320,"Normal World")
@@ -298,13 +380,14 @@ run-xen:
 		-nographic \
 		-serial tcp:localhost:54320 -serial tcp:localhost:54321 \
 		-smp $(QEMU_SMP) \
-		-s -S -machine virt,secure=on,gic-version=3 -cpu cortex-a57 \
+		-s -S $(QEMU_SECURE_FLASH)\
+	       	-cpu cortex-a57 			\
 		-d unimp -semihosting-config enable,target=native \
-		-m 1057 \
+		-m 4096 \
+		-no-acpi	\
 		$(QEMU_BIOS)			\
-		-drive if=pflash,format=raw,index=1,file=envstore.img		\
 		$(QEMU_XEN)			\
-		$(QEMU_EXTRA_ARGS)
+		$(QEMU_XEN_UBOOT)
 
 ifneq ($(filter check,$(MAKECMDGOALS)),)
 CHECK_DEPS := all
