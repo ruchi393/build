@@ -54,7 +54,11 @@ BL33_BIN		?= $(UBOOT_BIN)
 #BL33_BIN		?= $(EDK2_BIN)
 
 
-KERNEL			?= $(LINUX_PATH)/arch/arm64/boot/Image
+XEN_IMAGE		?= $(XEN_PATH)/xen/xen.efi
+XEN_EXT4		?= $(BINARIES_PATH)/xen.ext4
+XEN_CFG			?= $(ROOT)/build/xen.cfg
+XEN_DTB			?= $(ROOT)/build/xen.dtb
+KERNEL_IMAGE		?= $(LINUX_PATH)/arch/arm64/boot/Image
 MKIMAGE_PATH		?= $(UBOOT_PATH)/tools
 KERNEL_UIMAGE		?= $(BINARIES_PATH)/uImage
 ROOTFS			?= $(BINARIES_PATH)/rootfs.cpio.gz
@@ -78,7 +82,7 @@ endif
 ################################################################################
 # Targets
 ################################################################################
-all: arm-tf buildroot uboot linux optee-os qemu soc-term xen uboot-images dump-dtb
+all: arm-tf buildroot uboot linux optee-os qemu soc-term xen xen-create-image uboot-images dump-dtb
 clean: arm-tf-clean buildroot-clean edk2-clean linux-clean optee-os-clean \
 	qemu-clean soc-term-clean check-clean
 
@@ -99,18 +103,17 @@ TF_A_LOGLVL ?= 50
 TF_A_OUT = $(TF_A_PATH)/build/qemu/debug
 endif
 
-#	BL32=$(OPTEE_OS_HEADER_V2_BIN) \
-#	BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
-#	BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN) \
-#	SPD=opteed \
-#	BL32_RAM_LOCATION=tdram \
-
 TF_A_FLAGS ?= \
 	BL33=$(BL33_BIN) \
 	PLAT=qemu \
 	ARM_TSP_RAM_LOCATION=tdram \
 	QEMU_USE_GIC_DRIVER=$(TFA_GIC_DRIVER) \
 	DEBUG=$(TF_A_DEBUG) \
+	BL32=$(OPTEE_OS_HEADER_V2_BIN) \
+	BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
+	BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN) \
+	SPD=opteed \
+	BL32_RAM_LOCATION=tdram \
 	LOG_LEVEL=$(TF_A_LOGLVL)
 
 ifeq ($(TF_A_TRUSTED_BOARD_BOOT),y)
@@ -204,7 +207,7 @@ linux-cleaner: linux-cleaner-common
 ################################################################################
 # OP-TEE
 ################################################################################
-OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3)
+OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3) CFG_VIRTUALIZATION=y CFG_CORE_ASLR=y CFG_TA_ASLR=y CFG_CORE_DYN_SHM=y
 optee-os: optee-os-common
 
 optee-os-clean: optee-os-clean-common
@@ -240,8 +243,10 @@ uboot-defconfig: $(UBOOT_PATH)/.config
 .PHONY: uboot
 uboot: uboot-defconfig
 	$(MAKE) -C $(UBOOT_PATH) CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
+ifeq ($(BIOS_UBOOT),y)
 	mkdir -p $(BINARIES_PATH)
 	ln -sf $(UBOOT_PATH)/$(BIOS) $(BINARIES_PATH)/
+endif	
 
 .PHONY: uboot-menuconfig
 uboot-menuconfig: uboot-defconfig
@@ -267,6 +272,25 @@ xen:
       	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
 	ln -sf $(XEN)/xen $(BINARIES_PATH)
 
+XEN_TMP ?= $(BINARIES_PATH)/xen_files
+
+# When creating the image containing Linux kernel, we need to temporarily store
+# the files somewhere.
+$(XEN_TMP):
+	mkdir -p $@
+
+xen-create-image: $(XEN_TMP) linux xen 
+	# Use a written path to avoid rm -f real host machine files (in case
+	# GRUB2_TMP has been set to an empty string)
+	rm -f $(BINARIES_PATH)/xen_files/*
+	cp $(KERNEL_IMAGE) $(XEN_TMP)
+	cp $(XEN_IMAGE) $(XEN_TMP)
+	cp $(XEN_CFG) $(XEN_TMP)
+	cp $(XEN_DTB) $(XEN_TMP)
+	cp $(ROOT)/out-br/images/rootfs.cpio.gz $(XEN_TMP)
+	virt-make-fs -t vfat $(XEN_TMP) $(XEN_EXT4)
+
+
 ################################################################################
 # mkimage
 ################################################################################
@@ -279,7 +303,7 @@ ROOTFS_LOADADDR ?= 0x44000000
 
 # TODO: The linux.bin thing probably isn't necessary.
 .PHONY: uimage
-uimage: $(KERNEL)
+uimage: $(KERNEL_IMAGE) uboot
 	mkdir -p $(BINARIES_PATH) && \
         ${AARCH64_CROSS_COMPILE}objcopy -O binary -R .note -R .comment -S $(LINUX_PATH)/vmlinux $(BINARIES_PATH)/linux.bin && \
         $(MKIMAGE_PATH)/mkimage -A arm64 \
@@ -293,7 +317,7 @@ uimage: $(KERNEL)
 
 # FIXME: Names clashes ROOTFS and UROOTFS, this will overwrite the u-rootfs from Buildroot.
 .PHONY: urootfs
-urootfs:
+urootfs: uboot
 	mkdir -p $(BINARIES_PATH) && \
 	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/ && \
         $(MKIMAGE_PATH)/mkimage -A arm64 \
@@ -335,6 +359,8 @@ endif
 
 QEMU_XEN	+= -machine virtualization=true \
 		   -machine virt,gic-version=$(QEMU_GIC_VERSION)	\
+		   -drive if=none,file=$(XEN_EXT4),format=raw,id=hd1 \
+		   -device virtio-blk-device,drive=hd1 \
 		   -netdev user,id=vmnic -device virtio-net-device,netdev=vmnic 
 
 
@@ -376,6 +402,8 @@ run-xen: dump-dtb
 	$(call launch-terminal,54320,"Normal World")
 	$(call launch-terminal,54321,"Secure World")
 	$(call wait-for-ports,54320,54321)
+	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/
+	ln -sf $(ROOT)/out-br/images/rootfs.ext4 $(BINARIES_PATH)/
 	cd $(BINARIES_PATH) && $(QEMU_PATH)/aarch64-softmmu/qemu-system-aarch64 \
 		-nographic \
 		-serial tcp:localhost:54320 -serial tcp:localhost:54321 \
@@ -383,7 +411,7 @@ run-xen: dump-dtb
 		-s -S $(QEMU_SECURE_FLASH)\
 	       	-cpu cortex-a57 			\
 		-d unimp -semihosting-config enable,target=native \
-		-m 4096 \
+		-m 1057 \
 		-no-acpi	\
 		$(QEMU_BIOS)			\
 		$(QEMU_XEN)			\
