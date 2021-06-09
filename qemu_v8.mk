@@ -19,6 +19,8 @@ BR2_ROOTFS_POST_SCRIPT_ARGS = "$(QEMU_VIRTFS_AUTOMOUNT) $(QEMU_VIRTFS_MOUNTPOINT
 
 OPTEE_OS_PLATFORM = vexpress-qemu_armv8a
 
+XEN ?= n
+
 include common.mk
 
 DEBUG ?= 1
@@ -64,6 +66,13 @@ KERNEL_LOADADDR		?= 0x40400000
 ROOTFS_ENTRY		?= 0x44000000
 ROOTFS_LOADADDR		?= 0x44000000
 
+XEN_PATH		?= $(ROOT)/xen
+XEN_IMAGE		?= $(XEN_PATH)/xen/xen.efi
+XEN_GZ			?= $(XEN_PATH)/xen/xen.gz
+XEN_EXT4		?= $(BINARIES_PATH)/xen.ext4
+XEN_CFG			?= $(ROOT)/build/xen.cfg
+XEN_DTB			?= $(ROOT)/build/xen.dtb
+
 ifeq ($(GICV3),y)
 	TFA_GIC_DRIVER	?= QEMU_GICV3
 	QEMU_GIC_VERSION = 3
@@ -92,9 +101,14 @@ TARGET_DEPS 		+= $(BL33_DEPS)
 ifeq ($(UBOOT),y)
 TARGET_DEPS		+= uimage urootfs
 TARGET_CLEAN		+= uboot-clean
+ifeq ($(XEN),y)
+TARGET_DEPS		+= xen xen-create-image
+TARGET_CLEAN		+= xen-distclean
+endif
 else
 TARGET_CLEAN		+= edk2-clean
 endif
+
 
 all: $(TARGET_DEPS)
 
@@ -261,6 +275,9 @@ linux-cleaner: linux-cleaner-common
 # OP-TEE
 ################################################################################
 OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3)
+ifeq ($(XEN),y)
+OPTEE_OS_COMMON_FLAGS += CFG_VIRTUALIZATION=y CFG_CORE_ASLR=y CFG_TA_ASLR=y CFG_CORE_DYN_SHM=y
+endif
 optee-os: optee-os-common
 
 optee-os-clean: optee-os-clean-common
@@ -304,6 +321,46 @@ urootfs: buildroot $(BINARIES_PATH)
 				-d $(ROOTFS_GZ) $(ROOTFS_UGZ)
 
 ################################################################################
+# XEN
+################################################################################
+.PHONY: xen
+xen-defconfig:
+	$(MAKE) -C $(XEN_PATH)/xen XEN_TARGET_ARCH=arm64 defconfig
+
+xen-common: xen-defconfig
+	cd $(XEN_PATH)/xen && \
+	tools/kconfig/merge_config.sh -m .config $(ROOT)/build/kconfigs/xen.conf
+
+xen: xen-common $(BINARIES_PATH)
+	$(MAKE) -C $(XEN_PATH) dist-xen \
+	XEN_TARGET_ARCH=arm64 \
+	CONFIG_XEN_INSTALL_SUFFIX=.gz	\
+	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
+	ln -sf $(XEN)/xen $(BINARIES_PATH)
+
+XEN_TMP ?= $(BINARIES_PATH)/xen_files
+
+# When creating the image containing Linux kernel, we need to temporarily store
+# the files somewhere.
+$(XEN_TMP):
+	mkdir -p $@
+
+xen-create-image: $(XEN_TMP) xen linux buildroot
+	# Use a written path to avoid rm -f real host machine files (in case
+	# GRUB2_TMP has been set to an empty string)
+	rm -f $(BINARIES_PATH)/xen_files/*
+	cp $(KERNEL_IMAGE) $(XEN_TMP)
+	cp $(XEN_IMAGE) $(XEN_TMP)
+	cp $(XEN_CFG) $(XEN_TMP)
+	cp $(XEN_DTB) $(XEN_TMP)
+	cp $(ROOT)/out-br/images/rootfs.cpio.gz $(XEN_TMP)
+	virt-make-fs -t vfat $(XEN_TMP) $(XEN_EXT4)
+
+xen-distclean:
+	$(MAKE) -C $(XEN_PATH) distclean
+
+
+################################################################################
 # Run targets
 ################################################################################
 .PHONY: run
@@ -312,6 +369,13 @@ run: all
 	$(MAKE) run-only
 
 QEMU_SMP ?= 2
+
+ifeq ($(XEN),y)
+QEMU_XEN	?= -machine virtualization=true \
+		   -machine virt,gic-version=$(QEMU_GIC_VERSION) \
+		   -drive if=none,file=$(XEN_EXT4),format=raw,id=hd1 \
+		   -device virtio-blk-device,drive=hd1 
+endif
 
 .PHONY: run-only
 run-only:
@@ -329,10 +393,11 @@ run-only:
 		-machine virt,gic-version=$(QEMU_GIC_VERSION)		\
 		-d unimp -semihosting-config enable=on,target=native \
 		-m 1057 \
-		-bios bl1.bin \
+		-bios bl1.bin		\
 		-initrd rootfs.cpio.gz \
 		-kernel Image -no-acpi \
 		-append 'console=ttyAMA0,38400 keep_bootcon root=/dev/vda2 $(QEMU_KERNEL_BOOTARGS)' \
+		$(QEMU_XEN) \
 		$(QEMU_EXTRA_ARGS)
 
 ifneq ($(filter check,$(MAKECMDGOALS)),)
