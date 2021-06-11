@@ -12,6 +12,7 @@ COMPILE_S_KERNEL ?= 64
 # If you change this, you MUST run `make arm-tf-clean` first before rebuilding
 ################################################################################
 TF_A_TRUSTED_BOARD_BOOT ?= n
+VIRTUALIZATION		?= n
 
 BR2_ROOTFS_OVERLAY = $(ROOT)/build/br-ext/board/qemu/overlay
 BR2_ROOTFS_POST_BUILD_SCRIPT = $(ROOT)/build/br-ext/board/qemu/post-build.sh
@@ -19,9 +20,15 @@ BR2_ROOTFS_POST_SCRIPT_ARGS = "$(QEMU_VIRTFS_AUTOMOUNT) $(QEMU_VIRTFS_MOUNTPOINT
 
 OPTEE_OS_PLATFORM = vexpress-qemu_armv8a
 
+# Virtualization flow with XEN requires use of grub2 and uboot
+ifeq ($(VIRTUALIZATION),n)
 XEN ?= n
-
 GRUB ?= n
+else
+XEN ?= y
+GRUB ?= y
+UBOOT ?= y
+endif
 
 include common.mk
 
