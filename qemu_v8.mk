@@ -21,6 +21,8 @@ OPTEE_OS_PLATFORM = vexpress-qemu_armv8a
 
 XEN ?= n
 
+GRUB ?= n
+
 include common.mk
 
 DEBUG ?= 1
@@ -73,6 +75,9 @@ XEN_EXT4		?= $(BINARIES_PATH)/xen.ext4
 XEN_CFG			?= $(ROOT)/build/xen.cfg
 XEN_DTB			?= $(ROOT)/build/xen.dtb
 
+GRUB2_PATH		?= $(ROOT)/grub2
+GRUB2_EFI		?= $(BINARIES_PATH)/grub2-arm64.efi
+
 ifeq ($(GICV3),y)
 	TFA_GIC_DRIVER	?= QEMU_GICV3
 	QEMU_GIC_VERSION = 3
@@ -101,14 +106,22 @@ TARGET_DEPS 		+= $(BL33_DEPS)
 ifeq ($(UBOOT),y)
 TARGET_DEPS		+= uimage urootfs
 TARGET_CLEAN		+= uboot-clean
-ifeq ($(XEN),y)
-TARGET_DEPS		+= xen xen-create-image
-TARGET_CLEAN		+= xen-distclean
-endif
 else
 TARGET_CLEAN		+= edk2-clean
 endif
 
+ifeq ($(XEN),y)
+TARGET_DEPS		+= xen
+ifeq ($(GRUB), n)
+TARGET_DEPS		+= xen-create-image
+endif
+TARGET_CLEAN		+= xen-distclean
+endif
+
+ifeq ($(GRUB),y)
+TARGET_DEPS		+= grub2 grub2-create-image
+TARGET_CLEAN		+= grub2-clean
+endif
 
 all: $(TARGET_DEPS)
 
@@ -359,6 +372,70 @@ xen-create-image: $(XEN_TMP) xen linux buildroot
 xen-distclean:
 	$(MAKE) -C $(XEN_PATH) distclean
 
+################################################################################
+# Grub2
+################################################################################
+GRUB2_TMP ?= $(BINARIES_PATH)/grub2
+
+# When creating the image containing Linux kernel, we need to temporarily store
+# the files somewhere.
+$(GRUB2_TMP):
+	mkdir -p $@
+
+# Bootstrap if there is no configure or if it has been updated
+$(GRUB2_PATH)/configure:
+	@echo "Running grub2 bootstrap"
+	cd $(GRUB2_PATH) && ./bootstrap
+
+# Configure
+$(GRUB2_PATH)/config.h: $(GRUB2_PATH)/configure
+	cd $(GRUB2_PATH) && \
+		./configure --with-platform=efi \
+			    --target=aarch64-linux-gnu \
+			    --disable-werror \
+			    --localedir=$(GRUB2_PATH) \
+			    TARGET_CC=$(AARCH64_CROSS_COMPILE)gcc \
+			    TARGET_OBJCOPY=$(AARCH64_CROSS_COMPILE)objcopy \
+			    TARGET_STRIP=$(AARCH64_CROSS_COMPILE)strip
+
+# Compile
+grub2-compile: $(GRUB2_PATH)/config.h
+	$(MAKE) -C $(GRUB2_PATH)
+
+grub2-create-image: $(GRUB2_TMP) buildroot linux
+	# Use a written path to avoid rm -f real host machine files (in case
+	# GRUB2_TMP has been set to an empty string)
+	rm -f $(BINARIES_PATH)/grub2/*
+	cp $(KERNEL_IMAGE) $(GRUB2_TMP)
+	cp $(ROOT)/out-br/images/rootfs.cpio.gz $(GRUB2_TMP)
+ifeq ($(XEN), y)
+	cp $(XEN_GZ) $(GRUB2_TMP)
+	cp $(XEN_CFG) $(GRUB2_TMP)
+	cp $(XEN_DTB) $(GRUB2_TMP)
+endif
+	virt-make-fs -t vfat $(GRUB2_TMP) $(XEN_EXT4)
+
+# Create the efi file
+grub2: grub2-compile $(BINARIES_PATH)
+	$(GRUB2_PATH)/grub-mkstandalone \
+		-d $(GRUB2_PATH)/grub-core \
+		-O arm64-efi \
+		-o $(GRUB2_EFI) \
+		"boot/grub/grub.cfg=$(BUILD_PATH)/grub.cfg"
+
+grub2-help:
+	@echo "\n================================================================================"
+	@echo "= GRUB2 help                                                                   ="
+	@echo "================================================================================"
+	@echo "Boot kernel from grub2 shell:"
+	@echo "  insmod linux"
+	@echo "  linux (hd1)/Image root=/dev/vda"
+	@echo "  boot"
+
+.PHONY: grub2-clean
+grub2-clean:
+	cd $(GRUB2_PATH) && git clean -xdf
+
 
 ################################################################################
 # Run targets
@@ -392,7 +469,7 @@ run-only:
 		-s -S -machine virt,secure=on -cpu cortex-a57 \
 		-machine virt,gic-version=$(QEMU_GIC_VERSION)		\
 		-d unimp -semihosting-config enable=on,target=native \
-		-m 1057 \
+		-m 2048 \
 		-bios bl1.bin		\
 		-initrd rootfs.cpio.gz \
 		-kernel Image -no-acpi \
