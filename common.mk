@@ -28,6 +28,7 @@ ROOT ?= $(shell pwd)/..
 
 BUILD_PATH			?= $(ROOT)/build
 LINUX_PATH			?= $(ROOT)/linux
+UBOOT_PATH			?= $(ROOT)/u-boot
 OPTEE_OS_PATH			?= $(ROOT)/optee_os
 OPTEE_CLIENT_PATH		?= $(ROOT)/optee_client
 OPTEE_TEST_PATH			?= $(ROOT)/optee_test
@@ -360,6 +361,26 @@ edk2-clean-common:
 	source $(EDK2_PATH)/edksetup.sh && \
 	$(MAKE) -j1 -C $(EDK2_PATH)/BaseTools clean && \
 	$(call edk2-call) cleanall
+
+################################################################################
+# U-Boot
+################################################################################
+UBOOT_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_KERNEL)
+
+$(UBOOT_PATH)/.config: $(UBOOT_DEFCONFIG_FILES)
+	cd $(UBOOT_PATH) && \
+                scripts/kconfig/merge_config.sh $(UBOOT_DEFCONFIG_FILES)
+
+.PHONY: uboot-defconfig
+uboot-defconfig: $(UBOOT_PATH)/.config
+
+.PHONY: uboot-common
+uboot-common: uboot-defconfig
+	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS)
+
+.PHONY: uboot-clean-common
+uboot-clean-common:
+	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS) distclean
 
 ################################################################################
 # QEMU / QEMUv8
