@@ -26,6 +26,8 @@ XEN_BOOT ?= n
 ifeq ($(XEN_BOOT),y)
 GICV3 = y
 UBOOT = y
+# For DomU, guest.cfg and other images can be picked up from mounted folder
+QEMU_VIRTFS_AUTOMOUNT = y
 endif
 
 include common.mk
@@ -112,8 +114,8 @@ TARGET_CLEAN		+= edk2-clean
 endif
 
 ifeq ($(XEN_BOOT),y)
-TARGET_DEPS		+= xen xen-create-image
-TARGET_CLEAN		+= xen-distclean
+TARGET_DEPS		+= xen xen-create-image buildroot-domu
+TARGET_CLEAN		+= xen-distclean buildroot-domu-clean
 endif
 
 all: $(TARGET_DEPS)
@@ -336,7 +338,7 @@ xen-common: xen-defconfig
 	cd $(XEN_PATH)/xen && \
 	tools/kconfig/merge_config.sh -m .config $(ROOT)/build/kconfigs/xen.conf
 
-xen: xen-common $(BINARIES_PATH)
+xen: xen-common | $(BINARIES_PATH)
 	$(MAKE) -C $(XEN_PATH) dist-xen \
 	XEN_TARGET_ARCH=arm64 \
 	CONFIG_XEN_INSTALL_SUFFIX=.gz	\
@@ -345,8 +347,10 @@ xen: xen-common $(BINARIES_PATH)
 
 XEN_TMP ?= $(BINARIES_PATH)/xen_files
 
-xen-create-image: $(XEN_TMP) xen linux buildroot
-	mkdir -p $(XEN_TMP)
+$(XEN_TMP):
+	mkdir -p @
+
+xen-create-image: xen linux buildroot | $(XEN_TMP)
 	cp $(KERNEL_IMAGE) $(XEN_TMP)
 	cp $(XEN_IMAGE) $(XEN_TMP)
 	cp $(XEN_CFG) $(XEN_TMP)
