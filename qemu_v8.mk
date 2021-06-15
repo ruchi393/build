@@ -112,8 +112,8 @@ TARGET_CLEAN		+= edk2-clean
 endif
 
 ifeq ($(XEN_BOOT),y)
-TARGET_DEPS		+= xen xen-create-image
-TARGET_CLEAN		+= xen-distclean
+TARGET_DEPS		+= xen xen-create-image buildroot-domu
+TARGET_CLEAN		+= xen-distclean buildroot-domu-clean
 endif
 
 all: $(TARGET_DEPS)
