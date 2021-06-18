@@ -23,7 +23,7 @@ include common.mk
 
 DEBUG ?= 1
 
-# Option to use uboot in the boot flow instead of EDK2
+# Option to use U-Boot in the boot flow instead of EDK2
 UBOOT ?= n
 
 ################################################################################
@@ -63,7 +63,7 @@ ROOTFS_LOADADDR		?= 0x44000000
 
 ifeq ($(UBOOT),y)
 BL33_BIN		?= $(UBOOT_BIN)
-BL33_DEPS		?= uboot
+BL33_DEPS		?= u-boot
 else
 BL33_BIN		?= $(EDK2_BIN)
 BL33_DEPS		?= edk2
@@ -80,7 +80,7 @@ TARGET_DEPS 		+= $(BL33_DEPS)
 
 ifeq ($(UBOOT),y)
 TARGET_DEPS		+= $(KERNEL_UIMAGE) $(ROOTFS_UGZ)
-TARGET_CLEAN		+= uboot-clean
+TARGET_CLEAN		+= u-boot-clean
 else
 TARGET_CLEAN		+= edk2-clean
 endif
@@ -189,11 +189,24 @@ edk2-clean: edk2-clean-common
 UBOOT_DEFCONFIG_FILES := $(UBOOT_PATH)/configs/qemu_arm64_defconfig		\
 			 $(ROOT)/build/kconfigs/u-boot_qemu_v8.conf
 
-.PHONY: uboot
-uboot: uboot-common
+UBOOT_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_KERNEL)
 
-.PHONY: uboot-clean
-uboot-clean: uboot-clean-common
+$(UBOOT_PATH)/.config: $(UBOOT_DEFCONFIG_FILES)
+	cd $(UBOOT_PATH) && \
+                scripts/kconfig/merge_config.sh $(UBOOT_DEFCONFIG_FILES)
+
+.PHONY: u-boot-defconfig
+u-boot-defconfig: $(UBOOT_PATH)/.config
+
+.PHONY: u-boot
+u-boot: u-boot-defconfig
+	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS)
+
+.PHONY: u-boot-clean
+u-boot-clean:
+	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS) distclean
+
+################################################################################
 
 ################################################################################
 # Linux kernel
@@ -247,7 +260,7 @@ soc-term-clean:
 # mkimage - create images to be loaded by U-Boot
 ################################################################################
 # Without the objcopy, the uImage will be 10x bigger.
-$(KERNEL_UIMAGE): linux $(BINARIES_PATH)
+$(KERNEL_UIMAGE): linux | $(BINARIES_PATH)
 	${AARCH64_CROSS_COMPILE}objcopy -O binary \
 					-R .note \
 					-R .comment \
@@ -262,7 +275,7 @@ $(KERNEL_UIMAGE): linux $(BINARIES_PATH)
 				-n "Linux kernel" \
 				-d $(BINARIES_PATH)/linux.bin $(KERNEL_UIMAGE)
 
-$(ROOTFS_UGZ): buildroot $(BINARIES_PATH)
+$(ROOTFS_UGZ): buildroot | $(BINARIES_PATH)
 	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)
 	$(MKIMAGE_PATH)/mkimage -A arm64 \
 				-T ramdisk \

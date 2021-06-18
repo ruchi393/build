@@ -363,26 +363,6 @@ edk2-clean-common:
 	$(call edk2-call) cleanall
 
 ################################################################################
-# U-Boot
-################################################################################
-UBOOT_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_KERNEL)
-
-$(UBOOT_PATH)/.config: $(UBOOT_DEFCONFIG_FILES)
-	cd $(UBOOT_PATH) && \
-                scripts/kconfig/merge_config.sh $(UBOOT_DEFCONFIG_FILES)
-
-.PHONY: uboot-defconfig
-uboot-defconfig: $(UBOOT_PATH)/.config
-
-.PHONY: uboot-common
-uboot-common: uboot-defconfig
-	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS)
-
-.PHONY: uboot-clean-common
-uboot-clean-common:
-	$(MAKE) -C $(UBOOT_PATH) $(UBOOT_COMMON_FLAGS) distclean
-
-################################################################################
 # QEMU / QEMUv8
 ################################################################################
 QEMU_CONFIGURE_PARAMS_COMMON = --cc="$(CCACHE)gcc" --extra-cflags="-Wno-error" \
