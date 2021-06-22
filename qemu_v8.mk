@@ -19,9 +19,9 @@ BR2_ROOTFS_POST_SCRIPT_ARGS = "$(QEMU_VIRTFS_AUTOMOUNT) $(QEMU_VIRTFS_MOUNTPOINT
 
 OPTEE_OS_PLATFORM = vexpress-qemu_armv8a
 
-################################################################################
-# If you change this, you MUST run `make clean` before rebuilding
-################################################################################
+########################################################################################
+# If you change this, you MUST run `make arm-tf-clean optee-os-clean` before rebuilding
+########################################################################################
 XEN_BOOT ?= n
 ifeq ($(XEN_BOOT),y)
 GICV3 = y
@@ -115,7 +115,7 @@ endif
 
 ifeq ($(XEN_BOOT),y)
 TARGET_DEPS		+= xen xen-create-image buildroot-domu
-TARGET_CLEAN		+= xen-distclean buildroot-domu-clean
+TARGET_CLEAN		+= xen-clean buildroot-domu-clean
 endif
 
 all: $(TARGET_DEPS)
@@ -283,7 +283,7 @@ linux-cleaner: linux-cleaner-common
 ################################################################################
 OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3)
 ifeq ($(XEN_BOOT),y)
-OPTEE_OS_COMMON_FLAGS += CFG_VIRTUALIZATION=y CFG_CORE_DYN_SHM=y
+OPTEE_OS_COMMON_FLAGS += CFG_VIRTUALIZATION=y
 endif
 optee-os: optee-os-common
 
@@ -331,14 +331,12 @@ $(ROOTFS_UGZ): u-boot buildroot | $(BINARIES_PATH)
 # XEN
 ################################################################################
 .PHONY: xen
-xen-defconfig:
+$(XEN_PATH)/xen/.config:
 	$(MAKE) -C $(XEN_PATH)/xen XEN_TARGET_ARCH=arm64 defconfig
-
-xen-common: xen-defconfig
 	cd $(XEN_PATH)/xen && \
 	tools/kconfig/merge_config.sh -m .config $(ROOT)/build/kconfigs/xen.conf
 
-xen: xen-common | $(BINARIES_PATH)
+xen: $(XEN_PATH)/xen/.config | $(BINARIES_PATH)
 	$(MAKE) -C $(XEN_PATH) dist-xen \
 	XEN_TARGET_ARCH=arm64 \
 	CONFIG_XEN_INSTALL_SUFFIX=.gz	\
@@ -348,7 +346,13 @@ xen: xen-common | $(BINARIES_PATH)
 XEN_TMP ?= $(BINARIES_PATH)/xen_files
 
 $(XEN_TMP):
-	mkdir -p @
+	mkdir -p $@
+
+# virt-make-fs needs to be able to read the local kernel
+# See https://bugs.launchpad.net/ubuntu/+source/linux/+bug/759725
+build-host-vmlinuz := $(shell echo /boot/vmlinuz-`uname -r`)
+$(if $(shell [ -r $(build-host-vmlinuz) ] || echo No), \
+  $(error $(build-host-vmlinuz) is unreadable. Please run: sudo chmod a+r $(build-host-vmlinuz) and try again))
 
 xen-create-image: xen linux buildroot | $(XEN_TMP)
 	cp $(KERNEL_IMAGE) $(XEN_TMP)
@@ -357,8 +361,8 @@ xen-create-image: xen linux buildroot | $(XEN_TMP)
 	cp $(ROOT)/out-br/images/rootfs.cpio.gz $(XEN_TMP)
 	virt-make-fs -t vfat $(XEN_TMP) $(XEN_EXT4)
 
-xen-distclean:
-	$(MAKE) -C $(XEN_PATH) distclean
+xen-clean:
+	$(MAKE) -C $(XEN_PATH) clean
 
 ################################################################################
 # Run targets
