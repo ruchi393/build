@@ -37,7 +37,7 @@ OPTEE_EXAMPLES_PATH		?= $(ROOT)/optee_examples
 BUILDROOT_TARGET_ROOT		?= $(ROOT)/out-br/target
 
 # default high verbosity. slow uarts shall specify lower if prefered
-CFG_TEE_CORE_LOG_LEVEL		?= 3
+CFG_TEE_CORE_LOG_LEVEL		?= 4
 
 # default disable latency benchmarks (over all OP-TEE layers)
 CFG_TEE_BENCHMARK		?= n
@@ -296,6 +296,10 @@ endif
 
 # Embed opensc for pkcs11-tool
 BR2_PACKAGE_OPENSC ?= y
+BR2_PACKAGE_LIBCAP=y
+BR2_PACKAGE_LIBCAP_TOOLS=y
+BR2_PACKAGE_ATTR=y
+BR2_PACKAGE_ACL=y
 
 # All BR2_* variables from the makefile or the environment are appended to
 # ../out-br/extra.conf. All values are quoted "..." except y and n.

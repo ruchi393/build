@@ -11,6 +11,6 @@ config BR2_PACKAGE_OPTEE_CLIENT_EXT_SITE
 
 config BR2_PACKAGE_OPTEE_CLIENT_EXT_RPMB_EMU
 	bool "Enable RPMB emulation"
-	default y
+	default n
 	help
 	  Enable RPMB device emulation in tee-supplicant.

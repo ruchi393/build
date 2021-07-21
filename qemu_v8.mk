@@ -280,9 +280,10 @@ linux-cleaner: linux-cleaner-common
 ################################################################################
 # OP-TEE
 ################################################################################
-OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3)
+OPTEE_OS_COMMON_FLAGS += DEBUG=$(DEBUG) CFG_ARM_GICV3=$(GICV3) CFG_RPMB_FS=y CFG_RPMB_FS_DEBUG_DATA=y CFG_RPMB_TESTKEY=y
+#CFG_RPMB_WRITE_KEY=y
 ifeq ($(XEN_BOOT),y)
-OPTEE_OS_COMMON_FLAGS += CFG_VIRTUALIZATION=y
+OPTEE_OS_COMMON_FLAGS += CFG_VIRTUALIZATION=y 
 endif
 optee-os: optee-os-common
 
@@ -365,6 +366,10 @@ xen-clean:
 run: all
 	$(MAKE) run-only
 
+QEMU_RPMB	?= -chardev socket,path=vrpmb.sock,id=vrpmb \
+		-device vhost-user-rpmb-pci,chardev=vrpmb,id=rpmb \
+		-object memory-backend-file,id=mem,size=2G,mem-path=/dev/shm,share=on \
+		-numa node,memdev=mem 
 
 ifeq ($(XEN_BOOT),y)
 QEMU_MEM 	?= 2048
@@ -374,7 +379,7 @@ QEMU_XEN	?= -drive if=none,file=$(XEN_EXT4),format=raw,id=hd1 \
 		   -device virtio-blk-device,drive=hd1
 else
 QEMU_SMP 	?= 2
-QEMU_MEM 	?= 1057
+QEMU_MEM 	?= 2048
 QEMU_VIRT	= false
 endif
 
@@ -395,11 +400,13 @@ run-only:
 		-d unimp -semihosting-config enable=on,target=native \
 		-m $(QEMU_MEM) \
 		-bios bl1.bin		\
-		-initrd rootfs.cpio.gz \
 		-kernel Image -no-acpi \
+		-initrd rootfs.cpio.gz \
 		-append 'console=ttyAMA0,38400 keep_bootcon root=/dev/vda2 $(QEMU_KERNEL_BOOTARGS)' \
+		$(QEMU_RPMB) \
 		$(QEMU_XEN) \
 		$(QEMU_EXTRA_ARGS)
+
 
 ifneq ($(filter check,$(MAKECMDGOALS)),)
 CHECK_DEPS := all
