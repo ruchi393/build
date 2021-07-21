@@ -386,6 +386,8 @@ endif
 .PHONY: run-only
 run-only:
 	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/
+	ln -sf $(QEMU_PATH)/build/tools/vhost-user-rpmb/vhost-user-rpmb $(BINARIES_PATH)/
+	cp key $(BINARIES_PATH)/ 
 	$(call check-terminal)
 	$(call run-help)
 	$(call launch-terminal,54320,"Normal World")
